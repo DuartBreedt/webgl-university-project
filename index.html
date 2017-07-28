@@ -1,0 +1,856 @@
+<html>
+	<head>
+		<title>Project</title>
+		<script type="text/javascript" src="glMatrix-0.9.5.min.js"></script>
+		<script type="text/javascript" src="webgl-utils.js"></script>
+		<script type="text/javascript" src="initBuffers.js"></script>
+		<script type="text/javascript" src="myLib.js"></script>
+		<script type="text/javascript" src="particleSystem.js"></script>
+		
+
+		<script id="shader-fs" type="x-shader/x-fragment">
+
+			precision mediump float;
+
+		    varying vec2 vTextureCoord;
+		    varying vec3 vLightWeighting;
+		    varying vec4 vColor;
+		    uniform float alpha;
+		    uniform sampler2D uSampler;
+
+		    void main(void) {
+		    	vec4 textureColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+		        gl_FragColor = vec4(textureColor.rgb * vLightWeighting * vColor.rgb, alpha * textureColor.a);
+		    }
+
+		</script>
+
+		<script id="shader-vs" type="x-shader/x-vertex">
+
+			attribute vec3 aVertexPosition;
+   			attribute vec2 aTextureCoord;
+   			attribute vec4 aVertexColor;
+   			attribute vec3 aVertexNormal;
+
+		    uniform mat4 mvMatrix;
+		    uniform mat4 pMatrix;
+		    uniform mat3 nMatrix;
+
+		    uniform vec3 uAmbientColor;
+
+		    varying vec3 vLightWeighting;
+		    uniform vec3 uPointLightingLocation;
+			uniform vec3 uPointLightingColor;
+			varying vec3 vPointWeighting;
+
+		    varying vec2 vTextureCoord;
+		    varying vec4 vColor;
+		    uniform bool useColor;
+
+		    void main(void) {
+		    	if(useColor) { vColor = aVertexColor; }
+		    	else { vColor = vec4(1.0, 1.0, 1.0, 1.0); }
+
+		    	vec4 mvPosition = mvMatrix * vec4(aVertexPosition, 1.0);
+		        gl_Position = pMatrix * mvPosition;
+      			vTextureCoord = aTextureCoord;
+
+      			vec3 lightDirection = normalize(vec3(0.0, 10.0, 0.0)-mvPosition.xyz);
+				vec3 transformedNormal = nMatrix * aVertexNormal;
+				float directionalLightWeighting = max(dot(transformedNormal, lightDirection), 0.0);
+
+				vPointWeighting = vec3(1.0,1.0,1.0) * directionalLightWeighting;
+				vLightWeighting = uAmbientColor + vPointWeighting;
+		    }
+
+		</script>
+
+		<script type="text/javascript">
+
+			var X_ROT = 0;
+
+			var view = 0;
+			var movementVelocity = 0.3;
+			var movement = new Array(-8.0,0.0);
+
+			var leafSpell = false;
+			var trunkSpell = false;
+
+			var rotateLeaves = 0;
+			var rotateLeavesMultiplier = 0.01;
+			var rotateLeavesDirection = 1;
+
+			var shearLeaves = 90;
+			var shearLeavesDirection = 1;
+
+			var leavesShearMaxLimit = 110;
+			var leavesShearMinLimit = 70;
+
+			var rotateWand = 0;
+			var rotateWandDirection = 1;
+
+			var scaleWand = 1;
+			var scaleWandDirection = 1;
+
+			var translateWand = 0;
+			var translateWandDirection = 1;
+
+			var wandScaleMaxLimit = 1.1;
+			var wandScaleMinLimit = 0.9; 
+
+			var gl;
+			function initGL(canvas) {
+				try {
+					gl = canvas.getContext("webgl");
+					gl.viewportWidth = canvas.width;
+					gl.viewportHeight = canvas.height;
+				} catch (e) {}
+				if(!gl) { alert("GL could not start!"); }
+
+			}
+
+
+			function getShader(gl, id) {
+				var shaderScript = document.getElementById(id);
+		        if (!shaderScript) { return null; }
+
+		        var str = "";
+		        var k = shaderScript.firstChild;
+		        while (k) {
+		            if (k.nodeType == 3)
+		                str += k.textContent;
+		            k = k.nextSibling;
+		        }
+
+		        var shader;
+		        if (shaderScript.type == "x-shader/x-fragment") {
+		            shader = gl.createShader(gl.FRAGMENT_SHADER);
+		        } else if (shaderScript.type == "x-shader/x-vertex") {
+		            shader = gl.createShader(gl.VERTEX_SHADER);
+		        } else {
+		            return null;
+		        }
+
+		        gl.shaderSource(shader, str);
+		        gl.compileShader(shader);
+
+		        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+		            alert(gl.getShaderInfoLog(shader));
+		            return null;
+		        }
+		        return shader;
+			}
+
+			var shaderProgram;
+
+			function initShaders() {
+
+       			var fragmentShader = getShader(gl, "shader-fs");
+		        var vertexShader = getShader(gl, "shader-vs");
+
+		        shaderProgram = gl.createProgram();
+		        gl.attachShader(shaderProgram, vertexShader);
+		        gl.attachShader(shaderProgram, fragmentShader);
+		        gl.linkProgram(shaderProgram);
+
+		        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS))
+		            alert("Could not initialise shaders");
+
+		        gl.useProgram(shaderProgram);
+
+		        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        		gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+        		shaderProgram.vertexColorAttribute = gl.getAttribLocation(shaderProgram, "aVertexColor");
+				gl.enableVertexAttribArray(shaderProgram.vertexColorAttribute);
+
+        		shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+        		gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+
+    			shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+				gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+
+        		shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "pMatrix");
+        		shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "mvMatrix");
+        		shaderProgram.nMatrixUniform = gl.getUniformLocation(shaderProgram, "nMatrix");
+       			shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+       			shaderProgram.alphaUniform = gl.getUniformLocation(shaderProgram, "alpha");
+       			shaderProgram.ambientColorUniform = gl.getUniformLocation(shaderProgram, "uAmbientColor");
+       			shaderProgram.useColorUniform = gl.getUniformLocation(shaderProgram, "useColor");
+			}
+
+			function handleLoadedTexture(texture) {
+
+				gl.bindTexture(gl.TEXTURE_2D, texture);
+		        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+		        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texture.image);
+
+		        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+		        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+
+
+		        // Mipmap Filtering
+		        // gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        		// gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+        		// gl.generateMipmap(gl.TEXTURE_2D);
+
+		        gl.bindTexture(gl.TEXTURE_2D, null);
+			}
+
+			function initLighting() {
+				if(leafSpell) { gl.uniform3f(shaderProgram.ambientColorUniform, 0.4, 0.1, 0.1); }
+				else { gl.uniform3f(shaderProgram.ambientColorUniform, 0.05, 0.05, 0.05); }
+			}
+
+			var floorTexture;
+			var leavesTexture;
+			var autumnTexture;
+			var trunkTexture;
+			var pedestalTexture;
+			var wandTexture;
+			var wandParticleTexture;
+			var firefliesParticleTexture;
+
+			var posterTexture;
+			var posterNumber = 0;
+
+			var wallOne;
+			var wallTwo;
+			var wallThree;
+			var wallFour;
+
+			function changePosterTexture() {
+				var posterName = "poster/poster ("+posterNumber+").jpg";
+				posterNumber = (posterNumber+1)%157;
+				posterTexture.image.src = posterName;
+			}
+
+			function initTexture() {
+
+				firefliesParticleTexture = gl.createTexture();
+				firefliesParticleTexture.image = new Image();
+				firefliesParticleTexture.image.crossOrigin = "anonymous";
+				firefliesParticleTexture.image.onload = function() { handleLoadedTexture(firefliesParticleTexture); }
+				firefliesParticleTexture.image.src = "fireflies.png";
+
+				wandParticleTexture = gl.createTexture();
+				wandParticleTexture.image = new Image();
+				wandParticleTexture.image.crossOrigin = "anonymous";
+				wandParticleTexture.image.onload = function() { handleLoadedTexture(wandParticleTexture); }
+				wandParticleTexture.image.src = "wandParticle.png";
+
+				posterTexture = gl.createTexture();
+				posterTexture.image = new Image();
+				posterTexture.image.crossOrigin = "anonymous";
+				posterTexture.image.onload = function() { handleLoadedTexture(posterTexture); }
+				changePosterTexture();
+
+				wallFourTexture = gl.createTexture();
+				wallFourTexture.image = new Image();
+				wallFourTexture.image.crossOrigin = "anonymous";
+				wallFourTexture.image.onload = function() { handleLoadedTexture(wallFourTexture); }
+				wallFourTexture.image.src = "wallFour.jpg";
+
+				wallThreeTexture = gl.createTexture();
+				wallThreeTexture.image = new Image();
+				wallThreeTexture.image.crossOrigin = "anonymous";
+				wallThreeTexture.image.onload = function() { handleLoadedTexture(wallThreeTexture); }
+				wallThreeTexture.image.src = "wallThree.jpg";
+
+				wallTwoTexture = gl.createTexture();
+				wallTwoTexture.image = new Image();
+				wallTwoTexture.image.crossOrigin = "anonymous";
+				wallTwoTexture.image.onload = function() { handleLoadedTexture(wallTwoTexture); }
+				wallTwoTexture.image.src = "wallTwo.jpg";
+
+				wallOneTexture = gl.createTexture();
+				wallOneTexture.image = new Image();
+				wallOneTexture.image.crossOrigin = "anonymous";
+				wallOneTexture.image.onload = function() { handleLoadedTexture(wallOneTexture); }
+				wallOneTexture.image.src = "wallOne.jpg";
+
+				wandTexture = gl.createTexture();
+				wandTexture.image = new Image();
+				wandTexture.image.crossOrigin = "anonymous";
+				wandTexture.image.onload = function() { handleLoadedTexture(wandTexture); }
+				wandTexture.image.src = "wand.jpg";
+
+				pedestalTexture = gl.createTexture();
+				pedestalTexture.image = new Image();
+				pedestalTexture.image.crossOrigin = "anonymous";
+				pedestalTexture.image.onload = function() { handleLoadedTexture(pedestalTexture); }
+				pedestalTexture.image.src = "pedestal.jpg";
+
+				floorTexture = gl.createTexture();
+				floorTexture.image = new Image();
+				floorTexture.image.crossOrigin = "anonymous";
+				floorTexture.image.onload = function() { handleLoadedTexture(floorTexture); }
+				floorTexture.image.src = "floor.jpg";
+				
+				leavesTexture = gl.createTexture();
+				leavesTexture.image = new Image();
+				leavesTexture.image.crossOrigin = "anonymous";
+				leavesTexture.image.onload = function() { handleLoadedTexture(leavesTexture); }
+				leavesTexture.image.src = "leaves.jpg";
+
+				autumnTexture = gl.createTexture();
+				autumnTexture.image = new Image();
+				autumnTexture.image.crossOrigin = "anonymous";
+				autumnTexture.image.onload = function() { handleLoadedTexture(autumnTexture); }
+				autumnTexture.image.src = "autumnleaves.jpg";
+
+				trunkTexture = gl.createTexture();
+				trunkTexture.image = new Image();
+				trunkTexture.image.crossOrigin = "anonymous";
+				trunkTexture.image.onload = function() { handleLoadedTexture(trunkTexture); }
+				trunkTexture.image.src = "trunk.jpg";
+
+			}
+			
+			var mvMatrix = myLib.create ();
+			var pMatrix = myLib.create ();	
+			var normalMatrix = mat3.create();		
+
+			function setMatrixUniforms () {
+				gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+        		gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+
+        		var normalMatrix = mat3.create();
+				mat4.toInverseMat3(mvMatrix, normalMatrix);
+				mat3.transpose(normalMatrix);
+				gl.uniformMatrix3fv(shaderProgram.nMatrixUniform, false, normalMatrix);
+			}
+
+
+			/* ================== MOUSE ================== */
+
+			var currentlyPressedKeys = new Array();
+
+			document.onkeydown = handleKeyDown;
+			document.onkeyup = handleKeyUp;
+
+			function handleKeyDown(e) { 
+		        currentlyPressedKeys[e.keyCode] = true; 
+
+		        // V
+		        if (currentlyPressedKeys[86]) { 
+		            view = (view+1)%3;
+		        } 
+		        // W
+		        if (currentlyPressedKeys[87]) {
+		        	movement[0] += movementVelocity * Math.sin(myLib.degToRad(X_ROT+90));
+		    		movement[1] += movementVelocity * Math.cos(myLib.degToRad(X_ROT+90));
+		        }
+		        // A
+		        if (currentlyPressedKeys[65]) { 
+		        	X_ROT -= 2.0;
+		        }
+		        // S
+		        if (currentlyPressedKeys[83]) { 
+		        	movement[0] += -1 * movementVelocity * Math.sin(myLib.degToRad(X_ROT+90));
+		    		movement[1] += -1 * movementVelocity * Math.cos(myLib.degToRad(X_ROT+90));
+		        }
+		        // D
+		        if (currentlyPressedKeys[68]) { 
+		        	X_ROT += 2.0;
+		        }
+		        // M
+		        if (currentlyPressedKeys[77]) {
+					document.getElementById("audio").paused ? document.getElementById("audio").play() : document.getElementById("audio").pause();
+		        }
+		        // 1
+		        if (currentlyPressedKeys[49]) {
+		        	if(trunkSpell) { trunkSpell = false; }
+		        	else { trunkSpell = true; }
+		        }
+		        // 2
+		        if (currentlyPressedKeys[50]) {
+		        	if(leafSpell) { leafSpell = false; }
+		        	else { leafSpell = true; }
+		        	initLighting();
+		        }
+		        // Left
+		        if (currentlyPressedKeys[37]) {
+		        	leavesShearMaxLimit -= 2;
+		        	leavesShearMinLimit += 2;
+		        }
+		        // Right
+		        if (currentlyPressedKeys[39]) {
+		        	leavesShearMaxLimit += 2;
+		        	leavesShearMinLimit -= 2;
+		        }
+		        // O
+		        if (currentlyPressedKeys[79]) {
+		        	wandScaleMaxLimit -= 0.2;
+		        	wandScaleMinLimit += 0.2;
+		        }
+		        // P
+		        if (currentlyPressedKeys[80]) {
+		        	wandScaleMaxLimit += 0.2;
+		        	wandScaleMinLimit -= 0.2;
+		        }
+		    }
+
+		    function handleKeyUp(e) { currentlyPressedKeys[e.keyCode] = false; }
+
+			function updateLeaf() {
+
+				gl.bindBuffer(gl.ARRAY_BUFFER, leafVertexPositionBuffer);
+		        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, leafVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.bindBuffer(gl.ARRAY_BUFFER, leafVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, leafVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        
+		        if(leafSpell) { gl.bindTexture(gl.TEXTURE_2D, autumnTexture); }
+		        else { gl.bindTexture(gl.TEXTURE_2D, leavesTexture); }
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+		        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, leafVertexIndexBuffer);
+
+		        setMatrixUniforms();
+		        gl.drawElements(gl.TRIANGLES, leafVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+			}
+
+			function updateTrunk() {
+				
+				if(trunkSpell) { gl.uniform1f(shaderProgram.alphaUniform, 0.5); }
+
+				gl.bindBuffer (gl.ARRAY_BUFFER, trunkVertexPositionBuffer);
+				gl.vertexAttribPointer (shaderProgram.vertexPositionAttribute, trunkVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+				gl.bindBuffer(gl.ARRAY_BUFFER, trunkVertexNormalBuffer);
+				gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, trunkVertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+			
+				gl.bindBuffer(gl.ARRAY_BUFFER, trunkVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, trunkVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        gl.bindTexture(gl.TEXTURE_2D, trunkTexture);
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+			    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, trunkVertexIndexBuffer);
+				setMatrixUniforms ();
+			    gl.drawElements(gl.TRIANGLES, trunkVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+
+			    gl.uniform1f(shaderProgram.alphaUniform, 1.0);
+			}
+
+			function updateFloor() {
+
+				if(leafSpell) { gl.uniform3f(shaderProgram.ambientColorUniform, 0.8, 0.5, 0.5); }
+				else { gl.uniform3f(shaderProgram.ambientColorUniform, 0.3, 0.3, 0.3); }
+
+				gl.bindBuffer(gl.ARRAY_BUFFER, floorVertexPositionBuffer);
+		        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, floorVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.bindBuffer(gl.ARRAY_BUFFER, floorVertexNormalBuffer);
+				gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, floorVertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.bindBuffer(gl.ARRAY_BUFFER, floorVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, floorVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        gl.bindTexture(gl.TEXTURE_2D, floorTexture);
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+		        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, floorVertexIndexBuffer);
+       			setMatrixUniforms();
+        		gl.drawElements(gl.TRIANGLES, floorVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+		        gl.uniform3f(shaderProgram.ambientColorUniform, 0.1, 0.1, 0.1);
+			}
+
+			function updateWalls() {
+
+				gl.uniform3f(shaderProgram.ambientColorUniform, 0.5, 0.5, 0.5);
+
+				// WALL ONE
+				gl.bindBuffer(gl.ARRAY_BUFFER, wallOneVertexPositionBuffer);
+		        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, wallOneVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.bindBuffer(gl.ARRAY_BUFFER, wallOneVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, wallOneVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        gl.bindTexture(gl.TEXTURE_2D, wallOneTexture);
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+		        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wallOneVertexIndexBuffer);
+
+		        setMatrixUniforms();
+		        gl.drawElements(gl.TRIANGLES, wallOneVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+
+				// WALL TWO
+				gl.bindBuffer(gl.ARRAY_BUFFER, wallTwoVertexPositionBuffer);
+		        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, wallTwoVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.bindBuffer(gl.ARRAY_BUFFER, wallTwoVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, wallTwoVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        gl.bindTexture(gl.TEXTURE_2D, wallTwoTexture);
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+		        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wallTwoVertexIndexBuffer);
+
+		        setMatrixUniforms();
+		        gl.drawElements(gl.TRIANGLES, wallTwoVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+		        
+				// WALL Three
+				gl.bindBuffer(gl.ARRAY_BUFFER, wallThreeVertexPositionBuffer);
+		        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, wallThreeVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.bindBuffer(gl.ARRAY_BUFFER, wallThreeVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, wallThreeVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        gl.bindTexture(gl.TEXTURE_2D, wallThreeTexture);
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+		        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wallThreeVertexIndexBuffer);
+
+		        setMatrixUniforms();
+		        gl.drawElements(gl.TRIANGLES, wallThreeVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+		        
+				// WALL TWO
+				gl.bindBuffer(gl.ARRAY_BUFFER, wallFourVertexPositionBuffer);
+		        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, wallFourVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.bindBuffer(gl.ARRAY_BUFFER, wallFourVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, wallFourVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        gl.bindTexture(gl.TEXTURE_2D, wallFourTexture);
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+		        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wallFourVertexIndexBuffer);
+
+		        setMatrixUniforms();
+		        gl.drawElements(gl.TRIANGLES, wallFourVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+		        gl.uniform3f(shaderProgram.ambientColorUniform, 0.1, 0.1, 0.1);
+			}
+
+			function updatePedestal() {
+
+				gl.bindBuffer (gl.ARRAY_BUFFER, pedestalVertexPositionBuffer);
+				gl.vertexAttribPointer (shaderProgram.vertexPositionAttribute, pedestalVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+			
+				gl.bindBuffer(gl.ARRAY_BUFFER, pedestalVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, pedestalVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        gl.bindTexture(gl.TEXTURE_2D, pedestalTexture);
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+			    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pedestalVertexIndexBuffer);
+
+				setMatrixUniforms ();
+			    gl.drawElements(gl.TRIANGLES, pedestalVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+			}
+
+			function updateWand() {
+
+				gl.bindBuffer (gl.ARRAY_BUFFER, wandVertexPositionBuffer);
+				gl.vertexAttribPointer (shaderProgram.vertexPositionAttribute, wandVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+			
+				gl.bindBuffer(gl.ARRAY_BUFFER, wandVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, wandVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        gl.bindTexture(gl.TEXTURE_2D, wandTexture);
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+			    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wandVertexIndexBuffer);
+
+				setMatrixUniforms ();
+			    gl.drawElements(gl.TRIANGLES, wandVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+			}
+
+
+			function updatePoster() {
+
+				gl.bindBuffer (gl.ARRAY_BUFFER, posterVertexPositionBuffer);
+				gl.vertexAttribPointer (shaderProgram.vertexPositionAttribute, posterVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+			
+				gl.bindBuffer(gl.ARRAY_BUFFER, posterVertexTextureCoordBuffer);
+		        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, posterVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		        gl.activeTexture(gl.TEXTURE0);
+		        gl.bindTexture(gl.TEXTURE_2D, posterTexture);
+
+		        gl.uniform1i(shaderProgram.samplerUniform, 0);
+			    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, posterVertexIndexBuffer);
+
+				setMatrixUniforms ();
+			    gl.drawElements(gl.TRIANGLES, posterVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+			}
+
+
+			/* ======================== DRAW SCENE ======================== */
+
+			function drawScene () {
+
+				handleAnimation();
+				
+				gl.viewport (0, 0, gl.viewportWidth, gl.viewportHeight);
+				gl.clear (gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+				if(view == 0) {
+					pMatrix = myLib.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 150.0);
+				} else if(view == 1) {
+					pMatrix = myLib.ortho(-3.0, 4.0, -3.0, 4.0, 0, 1000);
+				} else if(view == 2) {
+					pMatrix = myLib.oblique(-3.0, 4.0, -3.0, 4.0, 0, 1000, 1, 1);
+					myLib.translate(pMatrix, [0, 0, 3]);
+				}
+
+				myLib.identity (mvMatrix);
+
+				myLib.rotate(mvMatrix, myLib.degToRad(X_ROT), [0,1,0]);
+				myLib.translate (mvMatrix, [movement[1], 0.0, movement[0]]);
+				
+				myLib.mvPushMatrix(mvMatrix);
+
+				gl.uniform1f(shaderProgram.alphaUniform, 1.0);
+				gl.disableVertexAttribArray(shaderProgram.vertexColorAttribute);
+				gl.uniform1i(shaderProgram.useColorUniform, false);
+
+				updateFloor();
+				updateWalls();
+				placePoster(9.5, 0.0, -9.4);
+
+				placeTree(10.0, 0.0, -10.0); // Poster
+
+				for (var i = 0; i < treesArr.length; i++)
+					placeTree(treesArr[i].x, 0, treesArr[i].z);
+
+				placePedestal(2.0, -2.0, -5.0);
+
+				placeWand(2.0, 0.1, -5.0);
+
+				myLib.translate (mvMatrix, [2.0, -2.0, -5.0]);
+				drawParticles("fireflies");
+				myLib.mvPopMatrix(mvMatrix);
+				myLib.mvPushMatrix(mvMatrix);
+
+				myLib.translate (mvMatrix, [2.0, 0.0, -5.0]);
+				drawParticles("wand");
+				myLib.mvPopMatrix(mvMatrix);
+				myLib.mvPushMatrix(mvMatrix);
+
+			}
+
+			var treesArr = new Array();
+			treesArr.push({x:10.0, z:-10.0});
+			treesArr.push({x:2.0, z:-5.0});
+			treesArr.push({x:-8.0, z:0.0});
+
+			function placeTrees(amount, distance) {
+				var trees = new Array();
+				for (var i = 0; i < amount; i++) {
+					var coords;
+					var x;
+					var z;
+					do {
+						var zSign = 1;
+						if(myLib.random(0, 10) >= 5.0) { zSign = -1; }
+
+						var newDist = myLib.random(-distance, distance);
+						x = myLib.random(-newDist, newDist);
+						z = zSign*Math.sqrt(Math.pow(newDist, 2)-Math.pow(x, 2));
+						coords = {x: x, z: z};
+					} while(!foundTreeSpace(trees, coords));
+					trees.push(coords);				
+				}
+				return trees;
+			}
+
+			function foundTreeSpace (trees, coords) {
+				for (var i = 0; i < trees.length; i++)
+					if(myLib.getEuclidean(trees[i].x, trees[i].z, coords.x, coords.z) < 5.0)
+						return false;
+				return true;
+			}
+
+			function tick () {
+				requestAnimFrame(tick);
+				drawScene();
+			}
+
+			function webGLStart () {
+
+				var canvasTemp = document.getElementById("myCanvas");
+				initGL(canvasTemp);
+				initShaders();
+				initBuffers();
+				initLighting();
+				initTexture();
+
+				gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+				gl.enable(gl.BLEND);
+
+				gl.clearColor (0.1, 0.0, 0.2, 1.0);
+				gl.enable (gl.DEPTH_TEST);
+
+				// Canvas Size
+				canvas = document.getElementById('myCanvas'),
+
+				treesArr = placeTrees(50, 50);
+
+				tick();
+
+			}
+			
+
+			window.addEventListener('resize', resizeCanvas, false);
+
+		    function resizeCanvas() {
+		            canvas.width = window.innerWidth-4;
+		            canvas.height = window.innerHeight-4;
+
+		            webGLStart();
+		    }
+
+		    function placeTree(x, y, z) {
+		    	
+				myLib.mvPushMatrix(mvMatrix);
+				
+				myLib.translate (mvMatrix, [x, y, z]);
+
+				updateTrunk();
+				myLib.mvPopMatrix(mvMatrix);
+
+				myLib.translate (mvMatrix, [x, 1.0+y, z]);
+				myLib.scale(mvMatrix, 1.5);
+				
+				updateLeaf();
+
+				myLib.mvPushMatrix(mvMatrix);
+
+				myLib.translate (mvMatrix, [0.0, 1.0, 0.0]);
+				myLib.scale(mvMatrix, 0.8);
+				myLib.rotate(mvMatrix, myLib.degToRad(rotateLeaves), [0,1,0]);
+				myLib.shear(mvMatrix, myLib.degToRad(shearLeaves), [1,0,0]);
+				
+				updateLeaf();
+				myLib.mvPopMatrix(mvMatrix);
+
+				myLib.translate (mvMatrix, [0.0, 1.8, 0.0]);
+				myLib.scale(mvMatrix, 0.64);
+				
+				updateLeaf();
+
+				myLib.mvPopMatrix(mvMatrix);
+				myLib.mvPushMatrix(mvMatrix);
+		    }
+
+		    function placePedestal(x, y, z) {
+				myLib.translate (mvMatrix, [x, y, z]);
+
+		    	updatePedestal();
+
+		    	myLib.mvPopMatrix(mvMatrix);
+				myLib.mvPushMatrix(mvMatrix);
+		    }
+
+		    function placePoster(x, y, z) {
+				myLib.translate (mvMatrix, [x, y, z]);
+
+		    	updatePoster();
+
+		    	myLib.mvPopMatrix(mvMatrix);
+				myLib.mvPushMatrix(mvMatrix);
+		    }
+
+		    function placeWand(x, y, z) {
+		    	
+		    	myLib.translate (mvMatrix, [x, y+translateWand+0.5, z]);
+		    	myLib.scale(mvMatrix, scaleWand);
+		    	myLib.rotate(mvMatrix, myLib.degToRad(rotateWand), [0, 1, 0]);
+				myLib.rotate(mvMatrix, myLib.degToRad(35), [0, 0, 1]);
+
+				// Force center of rotation to center
+				myLib.translate (mvMatrix, [0, -0.5, 0]);
+
+		    	updateWand();
+
+		    	myLib.mvPopMatrix(mvMatrix);
+				myLib.mvPushMatrix(mvMatrix);
+		    }
+
+		    function handleAnimation() {
+
+		    	changePosterTexture();
+
+		    	/* ================= LEAVES ===================== */
+		    		/* ================= ROTATE ===================== */
+				var leavesRotateMaxLimit = 20;
+				var leavesRotateMinLimit = 0;
+
+				// Easing
+				if(((rotateLeaves >= (leavesRotateMaxLimit-(leavesRotateMaxLimit*0.4)) && rotateLeavesDirection==1) || (rotateLeaves <= (leavesRotateMaxLimit*0.4) && rotateLeavesDirection==-1)) && rotateLeavesMultiplier > 0.01) {
+					rotateLeavesMultiplier-=(rotateLeavesMultiplier*0.005);
+				} else if(((rotateLeaves >= leavesRotateMaxLimit-(leavesRotateMaxLimit*0.4) && rotateLeavesDirection==-1) || (rotateLeaves <= (leavesRotateMaxLimit*0.4) && rotateLeavesDirection==1)) && rotateLeavesMultiplier < 0.1) {
+					rotateLeavesMultiplier+=(rotateLeavesMultiplier*0.005);
+				}
+
+				// Rotate
+				rotateLeaves += (rotateLeavesDirection*rotateLeavesMultiplier);
+
+				// Change directions
+				if(rotateLeaves >= leavesRotateMaxLimit || rotateLeaves < leavesRotateMinLimit) {
+					rotateLeavesDirection *= -1;
+				}
+
+					/* ================= SHEAR ===================== */
+
+				// Shear
+				shearLeaves += (shearLeavesDirection*0.05);
+
+				// Change directions
+				if(shearLeaves >= leavesShearMaxLimit || shearLeaves < leavesShearMinLimit) {
+					shearLeavesDirection *= -1;
+				}
+
+				/* ================= WAND ===================== */
+					/* ================= SCALE ===================== */
+
+				scaleWand += (scaleWandDirection*0.003);
+
+				// Change directions
+				if(scaleWand >= wandScaleMaxLimit || scaleWand < wandScaleMinLimit) {
+					scaleWandDirection *= -1;
+				}
+
+					/* ================= TRANSLATE ===================== */
+				var wandtranslateMaxLimit = 0.3;
+				var wandtranslateMinLimit = 0.0; 
+
+				translateWand += (translateWandDirection*0.002);
+
+				// Change directions
+				if(translateWand >= wandtranslateMaxLimit || translateWand < wandtranslateMinLimit) {
+					translateWandDirection *= -1;
+				}
+
+					/* ================= ROTATE ===================== */
+				rotateWand = (rotateWand+0.1)%360.00;
+		    }
+
+		</script>
+	</head>
+	<body onload="webGLStart(); resizeCanvas();">
+	<style>
+		body {
+			margin: 0;
+			padding: 0;
+		}
+		#myCanvas {
+			margin: 0;
+			padding: 0;
+		}
+	</style>
+		<canvas id="myCanvas" width="300" height="300"></canvas>
+		<audio id="audio" proload="auto" src="music.mp3" loop />
+</html>
